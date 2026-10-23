@@ -82,10 +82,78 @@ const commands = [
         autocomplete: true
       }
     ]
+  },
+  {
+    name: 'add_ping_time',
+    description: 'Add a time to get pinged in for a given ping, select day and time (multiple can be added)',
+    options:[
+      {
+        name:'ping_id',
+        type: 3, //string
+        description: 'type in the ID of the ping that you want this ID to be attributed to',
+        required: true
+      },
+      {
+        name: 'time',
+        type: 3, //String
+        description: 'input in the time of the ping, 24 hour format (eg: 17:00)',
+        required: true
+      },
+      {
+        name: 'day',
+        type: 3, //String
+        description: 'input in a week day',
+        required: true,
+        choices: [
+          { name: 'Monday', value: 'Monday' },
+          { name: 'Tuesday', value: 'Tuesday' },
+          { name: 'Wednesday', value: 'Wednesday' },
+          { name: 'Thursday', value: 'Thursday' },
+          { name: 'Friday', value: 'Friday' },
+          { name: 'Saturday', value: 'Saturday' },
+          { name: 'Sunday', value: 'Sunday' }
+        ]
+      },
+    ]
   }
 ];
-//--------------------------
 
+// Helper: Convert local weekday + time in a specific IANA timezone to UTC Date
+const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function convertLocalToUtc(weekdayName, timeStr, timezone) {
+    const dayIndex = weekdays.indexOf(weekdayName);
+    // Use 2026 so IANA uses modern offset rules (+01:00 for Algiers) instead of 1970 history!
+    const base = new Date(Date.UTC(2026, 0, 4 + dayIndex));
+    const [hour, minute] = timeStr.split(':').map(Number);
+
+    const localYear = base.getUTCFullYear();
+    const localMonth = base.getUTCMonth();
+    const localDay = base.getUTCDate();
+
+    const guess = new Date(Date.UTC(localYear, localMonth, localDay, hour, minute, 0));
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric', second: 'numeric',
+        hour12: false
+    });
+
+    const parts = formatter.formatToParts(guess);
+    const getPart = (type) => parseInt(parts.find(p => p.type === type).value, 10);
+
+    const gYear = getPart('year');
+    const gMonth = getPart('month') - 1;
+    const gDay = getPart('day');
+    const gHour = getPart('hour') % 24;
+    const gMinute = getPart('minute');
+
+    const simulatedLocalMillis = Date.UTC(gYear, gMonth, gDay, gHour, gMinute, 0);
+    const targetLocalMillis = Date.UTC(localYear, localMonth, localDay, hour, minute, 0);
+    const diff = simulatedLocalMillis - targetLocalMillis;
+
+    return new Date(guess.getTime() - diff);
+}
 client.once('ready', async () => {
   console.log(`Discord Bot logged in as ${client.user.tag}!`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -103,13 +171,12 @@ client.once('ready', async () => {
 
 // Listen for interactions (Autocomplete and Slash Commands)
 client.on('interactionCreate', async (interaction) => {
-  // 1. Handle Autocomplete live filtering
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'set_time_zone') {
       const focusedValue = interaction.options.getFocused().toLowerCase();
       const filtered = allTimezones
         .filter(tz => tz.toLowerCase().includes(focusedValue))
-        .slice(0, 25); // Discord max limit per response
+        .slice(0, 25);
 
       await interaction.respond(
         filtered.map(tz => ({ name: tz, value: tz }))
@@ -128,18 +195,18 @@ client.on('interactionCreate', async (interaction) => {
     const msg = interaction.options.getString('msg');
     const partner = interaction.options.getUser('partner');
     const score = 0;
+    
     await interaction.reply(`Ping created for <@${ownerId}> in <#${channel.id}>!`);
     const sql = `
-  INSERT INTO pings 
-    ( user_id, ping_name, target_channel, pinged_partner_id, message, score) 
-  VALUES 
-    ( ?, ?, ?, ?, ?, ?)
-`;
-db.query(sql,[ ownerId,ping_name,channel.id,partner ? partner.id : null ,msg,score],(err,result)=>{
-  if (err){console.log(err)} else {console.log("success?")}
-})
+      INSERT INTO pings 
+        (user_id, ping_name, target_channel, pinged_partner_id, message, score) 
+      VALUES 
+        (?, ?, ?, ?, ?, ?)
+    `;
+    db.query(sql, [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score], (err, result) => {
+      if (err) { console.log(err); } else { console.log("Ping created successfully!"); }
+    });
   }
-
 
   // 3. Handle /set_time_zone command
   if (interaction.commandName === 'set_time_zone') {
@@ -153,20 +220,117 @@ db.query(sql,[ ownerId,ping_name,channel.id,partner ? partner.id : null ,msg,sco
       });
     }
 
-    // Later: save chosenTimezone and interaction.user.id to your MySQL database users table here
     await interaction.reply({
       content: `Your timezone has been set to **${chosenTimezone}**!`,
       ephemeral: true
     });
-    console.log(chosenTimezone)
-    const sql="INSERT INTO users (user_id,timezone) VALUES (?,?) ON DUPLICATE KEY UPDATE timezone = VALUES(timezone) "
-    db.query(sql,[ownerId,chosenTimezone],(err,result)=>{
-          if (err) console.log(err)
-    })
+    
+    const sql = "INSERT INTO users (user_id, timezone) VALUES (?, ?) ON DUPLICATE KEY UPDATE timezone = VALUES(timezone)";
+    db.query(sql, [ownerId, chosenTimezone], (err, result) => {
+      if (err) console.log(err);
+    });
+  }
 
-    //ownerId  chosenTimezone
+  // 4. Handle /add_ping_time command (With Write-Time UTC Normalization)
+  if (interaction.commandName === 'add_ping_time') {
+    const ownerId = interaction.user.id;
+    const ping_id = interaction.options.getString('ping_id');
+    const msg = interaction.options.getString('msg');
+    const partner = interaction.options.getUser('partner');
+    const day = interaction.options.getString('day');
+    const time = interaction.options.getString('time');
+
+    const timezoneQuery = `SELECT timezone FROM users WHERE user_id = ?`;
+    db.query(timezoneQuery, [ownerId], async (err, results) => {
+      if (err || results.length === 0 || !results[0].timezone) {
+        return await interaction.reply({
+          content: `❌ You must set your timezone using \`/set_time_zone\` before adding ping times!`,
+          ephemeral: true
+        });
+      }
+
+      const userTimezone = results[0].timezone;
+
+      const utcDate = convertLocalToUtc(day, time, userTimezone);
+      const utcDay = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(utcDate);
+      const utcTime = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(utcDate);
+
+      await interaction.reply(`Time created for <@${ownerId}> at local day <${day}> @ <${time}> (${userTimezone}) -> [Stored as UTC: ${utcDay} @ ${utcTime}]`);
+
+      const insertSql = `
+        INSERT INTO ping_times 
+          (parent_ping_id, pinged_partner_id, message, day, time, ping_utc_day, ping_utc_time)
+        VALUES 
+          (?, ?, ?, ?, ?, ?, ?)
+      `;
+      db.query(insertSql, [ping_id, partner ? partner.id : null, msg, day, time, utcDay, utcTime], (err, result) => {
+        if (err) { console.log(err); } else { console.log("Ping time successfully added!"); }
+      });
+    });
   }
 });
+
+// Optimized Scheduler: MySQL filters natively using ping_utc_day and ping_utc_time
+async function checkAndSendPings() {
+    console.log("[Scheduler] Tick: Running checkAndSendPings...");
+
+    const sql = `
+        SELECT 
+            pt.ping_time_id,
+            pt.day,
+            pt.time,
+            COALESCE(pt.message, p.message) AS final_msg,
+            COALESCE(pt.pinged_partner_id, p.pinged_partner_id) AS final_partner,
+            p.target_channel,
+            p.user_id
+        FROM ping_times pt
+        JOIN pings p ON pt.parent_ping_id = p.ping_id
+        WHERE pt.ping_utc_day = DAYNAME(UTC_TIMESTAMP())
+          AND pt.ping_utc_time = TIME_FORMAT(UTC_TIMESTAMP(), '%H:%i:00')
+    `;
+
+    db.query(sql, async (err, results) => {
+        if (err) {
+            console.error("[Scheduler] ❌ SQL Error fetching pings:", err);
+            return;
+        }
+
+        console.log(`[Scheduler] 📊 Query matched ${results.length} ping(s) for the current UTC minute.`);
+
+        for (const row of results) {
+            try {
+                console.log(`[Scheduler] ✅ MATCH FOUND! Attempting to send ping for user ${row.user_id}...`);
+                
+                const channel = await client.channels.fetch(row.target_channel);
+                if (!channel) {
+                    console.log(`[Scheduler] ❌ Error: Could not find channel ID ${row.target_channel}`);
+                    continue;
+                }
+
+                let pingContent = `<@${row.user_id}> Time for your habit!`;
+                
+                if (row.final_partner) {
+                    pingContent += ` (Partner: <@${row.final_partner}>)`;
+                }
+
+                if (row.final_msg) {
+                    pingContent += `\n> ${row.final_msg}`;
+                }
+
+                await channel.send(pingContent);
+                console.log(`[Scheduler] 🎉 Successfully sent ping message!`);
+            } catch (innerErr) {
+                console.error(`[Scheduler] ❌ Failed to process row ${row.ping_time_id}:`, innerErr);
+            }
+        }
+    });
+}
+
+// Run every 60 seconds
+setInterval(async () => {
+    checkAndSendPings();
+    console.log("minute check");
+}, 60 * 1000);
 
 // Log the bot in
 client.login(process.env.DISCORD_TOKEN);
