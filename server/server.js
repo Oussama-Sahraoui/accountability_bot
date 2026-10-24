@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
-const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
+const { Client,EmbedBuilder, GatewayIntentBits, REST, Routes } = require('discord.js');
 const app = express();
 
 app.use(express.json());
@@ -42,7 +42,7 @@ const allTimezones = Intl.supportedValuesOf('timeZone');
 const commands = [
   {
     name: 'create_ping',
-    description: 'Create a new accountability ping',
+    description: 'Create an accountability ping, to tag you in a specific time and channel',
     options: [
       {
         name: 'name',
@@ -65,7 +65,7 @@ const commands = [
       {
         name: 'partner',
         type: 6, // USER
-        description: 'Your accountability partner',
+        description: 'Your accountability partner to be pinged in case of failure',
         required: false,
       }
     ]
@@ -85,7 +85,7 @@ const commands = [
   },
   {
     name: 'add_ping_time',
-    description: 'Add a time to get pinged in for a given ping, select day and time (multiple can be added)',
+    description: 'Add a time in a specific day for a given ping, select day and time, multiple can be added',
     options:[
       {
         name:'ping_id',
@@ -115,8 +115,32 @@ const commands = [
         ]
       },
     ]
-  }
+  },
+  {
+    name:"view_pings",
+    description:"view your currently active pings",
+    
+  },
+  {
+    name:"view_ping_times",
+    description:"view your currently active times, associated with a ping",
+    options:[
+      {
+       name:"ping_id",
+       description:"ping_id of the ping who's times you'd like to view",
+       type:3,
+       required:true
+      },
+
+    ]
+  },
+  {
+    name:"help",
+    description: "gives a list of commands a usage guide"
+  },
+  
 ];
+
 
 // Helper: Convert local weekday + time in a specific IANA timezone to UTC Date
 const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -184,9 +208,118 @@ client.on('interactionCreate', async (interaction) => {
     }
     return;
   }
+//view command, to view your pings
 
   if (!interaction.isChatInputCommand()) return;
 
+
+
+ if (interaction.commandName === 'view_ping_times') {
+       const ownerId = interaction.user.id;
+       const ping_Id = interaction.options.getString('ping_id')
+    sql=`
+      SELECT 
+  pt.ping_time_id,
+  pt.time,
+  pt.day,
+  COALESCE(pt.pinged_partner_id, p.pinged_partner_id) AS pinged_partner_id,
+  COALESCE(pt.message, p.message) AS message
+FROM ping_times pt
+JOIN pings p ON pt.parent_ping_id = p.ping_id
+WHERE pt.parent_ping_id = ?
+    `
+db.query(sql, [ping_Id], async (err, res) => {
+  if (err) {
+    console.log(err);
+    return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+  }
+
+  // Handle case where user has no pings yet
+  if (!res || res.length === 0) {
+    return interaction.reply({ content: 'You have no active ping times.', ephemeral: true });
+  }
+
+  const timeEmbed = new EmbedBuilder()
+    .setColor(0x0099FF)
+    .setTitle('Your Active Pings')
+    .setDescription('Here are all your scheduled pings:')
+    .addFields(
+  res.map(row => ({
+    name: 'ping time',
+    value: `**ID:** \`${row.ping_time_id}\`\n` +
+           `**Time:** ${row.time}\n` +
+           `**Day:** ${row.day}\n` +
+           `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
+           `**Message:** ${row.message || 'None'}`
+  }))
+)
+    .setFooter({ text: 'View time overview' });
+
+  await interaction.reply({ embeds: [timeEmbed] });
+});
+
+  }
+
+
+
+  if (interaction.commandName === 'view_pings') {
+       const ownerId = interaction.user.id;
+
+    sql=`
+   SELECT ping_id, ping_name, target_channel, pinged_partner_id, message 
+FROM pings 
+WHERE user_id = ?
+    `
+db.query(sql, [ownerId], async (err, res) => {
+  if (err) {
+    console.log(err);
+    return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+  }
+
+  // Handle case where user has no pings yet
+  if (!res || res.length === 0) {
+    return interaction.reply({ content: 'You have no active pings.', ephemeral: true });
+  }
+
+  const viewEmbed = new EmbedBuilder()
+    .setColor(0x0099FF)
+    .setTitle('Your Active Pings')
+    .setDescription('Here are all your scheduled pings:')
+    .addFields(
+  res.map(row => ({
+    name: "name: "+row.ping_name || 'Ping',
+    value: `**ID:** \`${row.ping_id}\`\n` +
+           `**Channel:** <#${row.target_channel}>\n` +
+           `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
+           `**Message:** ${row.message || 'None'}`
+  }))
+)
+    .setFooter({ text: 'Ping Overview' });
+
+  await interaction.reply({ embeds: [viewEmbed] });
+});
+
+  }
+
+
+   // handle help command
+  if (interaction.commandName === 'help') {
+
+   
+
+const helpEmbed = new EmbedBuilder()
+  .setColor(0x0099FF) // or 'Blue', Hex color code
+  .setTitle('Command List')
+  .setDescription('Here are all the available commands:')
+  .addFields(
+    commands.map(cmd=>({
+      name:cmd.name,
+      value:cmd.description
+    }))
+  )
+  .setFooter({ text: 'Usage Guide' });
+    await interaction.reply({ embeds: [helpEmbed] });
+  }
   // 2. Handle /create_ping command
   if (interaction.commandName === 'create_ping') {
     const ownerId = interaction.user.id;
@@ -324,7 +457,10 @@ async function checkAndSendPings() {
             }
         }
     });
-}
+  
+
+
+  }
 
 // Run every 60 seconds
 setInterval(async () => {
