@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
-const { Client,EmbedBuilder, GatewayIntentBits, REST, Routes } = require('discord.js');
+const { Client, EmbedBuilder, GatewayIntentBits, REST, Routes, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const app = express();
 
 app.use(express.json());
@@ -15,6 +15,9 @@ const db = mysql.createConnection({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
 });
+
+// Temporary storage for multi-step ping time selection
+const pendingPingTimes = new Map();
 
 app.get("/fetch_test_msg", (req, res) => {
   res.send("hi");
@@ -32,10 +35,10 @@ const client = new Client({
   ]
 });
 
-//discord code section below:
-//--------------------------
-//discord var init section
-//--------------------------
+// discord code section below:
+// --------------------------
+// discord var init section
+// --------------------------
 const serverid = process.env.SERVER_ID;
 const allTimezones = Intl.supportedValuesOf('timeZone');
 
@@ -85,69 +88,61 @@ const commands = [
   },
   {
     name: 'add_ping_time',
-    description: 'Add a time in a specific day for a given ping, select day and time, multiple can be added',
+    description: 'Add a time for a given ping with multi-day selection',
     options:[
       {
-        name:'ping_id',
-        type: 3, //string
-        description: 'type in the ID of the ping that you want this ID to be attributed to',
+        name: 'ping_id',
+        type: 3, // string
+        description: 'The ID of the parent ping',
         required: true
       },
       {
         name: 'time',
-        type: 3, //String
-        description: 'input in the time of the ping, 24 hour format (eg: 17:00)',
+        type: 3, // String
+        description: 'Time in 24-hour format (e.g., 17:00)',
         required: true
       },
       {
-        name: 'day',
-        type: 3, //String
-        description: 'input in a week day',
-        required: true,
-        choices: [
-          { name: 'Monday', value: 'Monday' },
-          { name: 'Tuesday', value: 'Tuesday' },
-          { name: 'Wednesday', value: 'Wednesday' },
-          { name: 'Thursday', value: 'Thursday' },
-          { name: 'Friday', value: 'Friday' },
-          { name: 'Saturday', value: 'Saturday' },
-          { name: 'Sunday', value: 'Sunday' }
-        ]
+        name: 'msg',
+        type: 3,
+        description: 'Optional custom message override',
+        required: false,
       },
+      {
+        name: 'partner',
+        type: 6, // USER
+        description: 'Optional partner override',
+        required: false,
+      }
     ]
   },
   {
-    name:"view_pings",
-    description:"view your currently active pings",
-    
+    name: "view_pings",
+    description: "view your currently active pings",
   },
   {
-    name:"view_ping_times",
-    description:"view your currently active times, associated with a ping",
+    name: "view_ping_times",
+    description: "view your currently active times, associated with a ping",
     options:[
       {
-       name:"ping_id",
-       description:"ping_id of the ping who's times you'd like to view",
-       type:3,
-       required:true
-      },
-
+       name: "ping_id",
+       description: "ping_id of the ping who's times you'd like to view",
+       type: 3,
+       required: true
+      }
     ]
   },
   {
-    name:"help",
+    name: "help",
     description: "gives a list of commands a usage guide"
-  },
-  
+  }
 ];
-
 
 // Helper: Convert local weekday + time in a specific IANA timezone to UTC Date
 const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function convertLocalToUtc(weekdayName, timeStr, timezone) {
     const dayIndex = weekdays.indexOf(weekdayName);
-    // Use 2026 so IANA uses modern offset rules (+01:00 for Algiers) instead of 1970 history!
     const base = new Date(Date.UTC(2026, 0, 4 + dayIndex));
     const [hour, minute] = timeStr.split(':').map(Number);
 
@@ -178,6 +173,7 @@ function convertLocalToUtc(weekdayName, timeStr, timezone) {
 
     return new Date(guess.getTime() - diff);
 }
+
 client.once('ready', async () => {
   console.log(`Discord Bot logged in as ${client.user.tag}!`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -193,7 +189,7 @@ client.once('ready', async () => {
   }
 });
 
-// Listen for interactions (Autocomplete and Slash Commands)
+// Listen for interactions (Autocomplete, Slash Commands, and Select Menus)
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'set_time_zone') {
@@ -208,119 +204,162 @@ client.on('interactionCreate', async (interaction) => {
     }
     return;
   }
-//view command, to view your pings
+
+  // Handle Select Menu submission for multi-day ping times
+  if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_days') {
+    const ownerId = interaction.user.id;
+    const pendingData = pendingPingTimes.get(ownerId);
+
+    if (!pendingData) {
+      return interaction.update({ content: '❌ Session expired. Please run `/add_ping_time` again.', components: [] });
+    }
+
+    let selectedDays = interaction.values;
+    if (selectedDays.includes('everyday')) {
+      selectedDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    }
+
+    const timezoneQuery = `SELECT timezone FROM users WHERE user_id = ?`;
+    db.query(timezoneQuery, [ownerId], async (err, results) => {
+      if (err || results.length === 0 || !results[0].timezone) {
+        return await interaction.update({
+          content: `❌ You must set your timezone using \`/set_time_zone\` before adding ping times!`,
+          components: [],
+        });
+      }
+
+      const userTimezone = results[0].timezone;
+
+      for (const day of selectedDays) {
+        const utcDate = convertLocalToUtc(day, pendingData.time, userTimezone);
+        const utcDay = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(utcDate);
+        const utcTime = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(utcDate);
+
+        const insertSql = `
+          INSERT INTO ping_times 
+            (parent_ping_id, pinged_partner_id, message, day, time, ping_utc_day, ping_utc_time)
+          VALUES 
+            (?, ?, ?, ?, ?, ?, ?)
+        `;
+        db.query(insertSql, [
+          pendingData.ping_id, 
+          pendingData.partner ? pendingData.partner.id : null, 
+          pendingData.msg, 
+          day, 
+          pendingData.time, 
+          utcDay, 
+          utcTime
+        ], (err, result) => {
+          if (err) { console.log(err); } else { console.log(`Ping time added for ${day}!`); }
+        });
+      }
+
+      pendingPingTimes.delete(ownerId);
+
+      await interaction.update({
+        content: `🎉 Successfully created ping times for **${selectedDays.join(', ')}** at **${pendingData.time}** (${userTimezone})!`,
+        components: [],
+      });
+    });
+    return;
+  }
 
   if (!interaction.isChatInputCommand()) return;
 
-
-
- if (interaction.commandName === 'view_ping_times') {
-       const ownerId = interaction.user.id;
-       const ping_Id = interaction.options.getString('ping_id')
-    sql=`
+  if (interaction.commandName === 'view_ping_times') {
+    const ping_Id = interaction.options.getString('ping_id');
+    const sql = `
       SELECT 
-  pt.ping_time_id,
-  pt.time,
-  pt.day,
-  COALESCE(pt.pinged_partner_id, p.pinged_partner_id) AS pinged_partner_id,
-  COALESCE(pt.message, p.message) AS message
-FROM ping_times pt
-JOIN pings p ON pt.parent_ping_id = p.ping_id
-WHERE pt.parent_ping_id = ?
-    `
-db.query(sql, [ping_Id], async (err, res) => {
-  if (err) {
-    console.log(err);
-    return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+        pt.ping_time_id,
+        pt.time,
+        pt.day,
+        COALESCE(pt.pinged_partner_id, p.pinged_partner_id) AS pinged_partner_id,
+        COALESCE(pt.message, p.message) AS message
+      FROM ping_times pt
+      JOIN pings p ON pt.parent_ping_id = p.ping_id
+      WHERE pt.parent_ping_id = ?
+    `;
+    db.query(sql, [ping_Id], async (err, res) => {
+      if (err) {
+        console.log(err);
+        return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+      }
+
+      if (!res || res.length === 0) {
+        return interaction.reply({ content: 'You have no active ping times.', ephemeral: true });
+      }
+
+      const timeEmbed = new EmbedBuilder()
+        .setColor(0x0099FF)
+        .setTitle('Your Active Pings')
+        .setDescription('Here are all your scheduled pings:')
+        .addFields(
+          res.map(row => ({
+            name: 'ping time',
+            value: `**ID:** \`${row.ping_time_id}\`\n` +
+                   `**Time:** ${row.time}\n` +
+                   `**Day:** ${row.day}\n` +
+                   `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
+                   `**Message:** ${row.message || 'None'}`
+          }))
+        )
+        .setFooter({ text: 'View time overview' });
+
+      await interaction.reply({ embeds: [timeEmbed] });
+    });
   }
-
-  // Handle case where user has no pings yet
-  if (!res || res.length === 0) {
-    return interaction.reply({ content: 'You have no active ping times.', ephemeral: true });
-  }
-
-  const timeEmbed = new EmbedBuilder()
-    .setColor(0x0099FF)
-    .setTitle('Your Active Pings')
-    .setDescription('Here are all your scheduled pings:')
-    .addFields(
-  res.map(row => ({
-    name: 'ping time',
-    value: `**ID:** \`${row.ping_time_id}\`\n` +
-           `**Time:** ${row.time}\n` +
-           `**Day:** ${row.day}\n` +
-           `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
-           `**Message:** ${row.message || 'None'}`
-  }))
-)
-    .setFooter({ text: 'View time overview' });
-
-  await interaction.reply({ embeds: [timeEmbed] });
-});
-
-  }
-
-
 
   if (interaction.commandName === 'view_pings') {
-       const ownerId = interaction.user.id;
+    const ownerId = interaction.user.id;
+    const sql = `
+      SELECT ping_id, ping_name, target_channel, pinged_partner_id, message 
+      FROM pings 
+      WHERE user_id = ?
+    `;
+    db.query(sql, [ownerId], async (err, res) => {
+      if (err) {
+        console.log(err);
+        return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+      }
 
-    sql=`
-   SELECT ping_id, ping_name, target_channel, pinged_partner_id, message 
-FROM pings 
-WHERE user_id = ?
-    `
-db.query(sql, [ownerId], async (err, res) => {
-  if (err) {
-    console.log(err);
-    return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+      if (!res || res.length === 0) {
+        return interaction.reply({ content: 'You have no active pings.', ephemeral: true });
+      }
+
+      const viewEmbed = new EmbedBuilder()
+        .setColor(0x0099FF)
+        .setTitle('Your Active Pings')
+        .setDescription('Here are all your scheduled pings:')
+        .addFields(
+          res.map(row => ({
+            name: "name: " + row.ping_name || 'Ping',
+            value: `**ID:** \`${row.ping_id}\`\n` +
+                   `**Channel:** <#${row.target_channel}>\n` +
+                   `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
+                   `**Message:** ${row.message || 'None'}`
+          }))
+        )
+        .setFooter({ text: 'Ping Overview' });
+
+      await interaction.reply({ embeds: [viewEmbed] });
+    });
   }
 
-  // Handle case where user has no pings yet
-  if (!res || res.length === 0) {
-    return interaction.reply({ content: 'You have no active pings.', ephemeral: true });
-  }
-
-  const viewEmbed = new EmbedBuilder()
-    .setColor(0x0099FF)
-    .setTitle('Your Active Pings')
-    .setDescription('Here are all your scheduled pings:')
-    .addFields(
-  res.map(row => ({
-    name: "name: "+row.ping_name || 'Ping',
-    value: `**ID:** \`${row.ping_id}\`\n` +
-           `**Channel:** <#${row.target_channel}>\n` +
-           `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
-           `**Message:** ${row.message || 'None'}`
-  }))
-)
-    .setFooter({ text: 'Ping Overview' });
-
-  await interaction.reply({ embeds: [viewEmbed] });
-});
-
-  }
-
-
-   // handle help command
   if (interaction.commandName === 'help') {
-
-   
-
-const helpEmbed = new EmbedBuilder()
-  .setColor(0x0099FF) // or 'Blue', Hex color code
-  .setTitle('Command List')
-  .setDescription('Here are all the available commands:')
-  .addFields(
-    commands.map(cmd=>({
-      name:cmd.name,
-      value:cmd.description
-    }))
-  )
-  .setFooter({ text: 'Usage Guide' });
+    const helpEmbed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('Command List')
+      .setDescription('Here are all the available commands:')
+      .addFields(
+        commands.map(cmd => ({
+          name: cmd.name,
+          value: cmd.description
+        }))
+      )
+      .setFooter({ text: 'Usage Guide' });
     await interaction.reply({ embeds: [helpEmbed] });
   }
-  // 2. Handle /create_ping command
+
   if (interaction.commandName === 'create_ping') {
     const ownerId = interaction.user.id;
     const ping_name = interaction.options.getString('name');
@@ -341,7 +380,6 @@ const helpEmbed = new EmbedBuilder()
     });
   }
 
-  // 3. Handle /set_time_zone command
   if (interaction.commandName === 'set_time_zone') {
     const chosenTimezone = interaction.options.getString('timezone');
     const ownerId = interaction.user.id;
@@ -364,46 +402,41 @@ const helpEmbed = new EmbedBuilder()
     });
   }
 
-  // 4. Handle /add_ping_time command (With Write-Time UTC Normalization)
   if (interaction.commandName === 'add_ping_time') {
     const ownerId = interaction.user.id;
     const ping_id = interaction.options.getString('ping_id');
     const msg = interaction.options.getString('msg');
     const partner = interaction.options.getUser('partner');
-    const day = interaction.options.getString('day');
     const time = interaction.options.getString('time');
 
-    const timezoneQuery = `SELECT timezone FROM users WHERE user_id = ?`;
-    db.query(timezoneQuery, [ownerId], async (err, results) => {
-      if (err || results.length === 0 || !results[0].timezone) {
-        return await interaction.reply({
-          content: `❌ You must set your timezone using \`/set_time_zone\` before adding ping times!`,
-          ephemeral: true
-        });
-      }
+    pendingPingTimes.set(ownerId, { ping_id, time, msg, partner });
 
-      const userTimezone = results[0].timezone;
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId('select_ping_days')
+      .setPlaceholder('Select days for this ping time...')
+      .setMinValues(1)
+      .setMaxValues(8)
+      .addOptions(
+        new StringSelectMenuOptionBuilder().setLabel('Everyday (All 7 Days)').setValue('everyday'),
+        new StringSelectMenuOptionBuilder().setLabel('Monday').setValue('Monday'),
+        new StringSelectMenuOptionBuilder().setLabel('Tuesday').setValue('Tuesday'),
+        new StringSelectMenuOptionBuilder().setLabel('Wednesday').setValue('Wednesday'),
+        new StringSelectMenuOptionBuilder().setLabel('Thursday').setValue('Thursday'),
+        new StringSelectMenuOptionBuilder().setLabel('Friday').setValue('Friday'),
+        new StringSelectMenuOptionBuilder().setLabel('Saturday').setValue('Saturday'),
+        new StringSelectMenuOptionBuilder().setLabel('Sunday').setValue('Sunday')
+      );
 
-      const utcDate = convertLocalToUtc(day, time, userTimezone);
-      const utcDay = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(utcDate);
-      const utcTime = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(utcDate);
+    const row = new ActionRowBuilder().addComponents(selectMenu);
 
-      await interaction.reply(`Time created for <@${ownerId}> at local day <${day}> @ <${time}> (${userTimezone}) -> [Stored as UTC: ${utcDay} @ ${utcTime}]`);
-
-      const insertSql = `
-        INSERT INTO ping_times 
-          (parent_ping_id, pinged_partner_id, message, day, time, ping_utc_day, ping_utc_time)
-        VALUES 
-          (?, ?, ?, ?, ?, ?, ?)
-      `;
-      db.query(insertSql, [ping_id, partner ? partner.id : null, msg, day, time, utcDay, utcTime], (err, result) => {
-        if (err) { console.log(err); } else { console.log("Ping time successfully added!"); }
-      });
+    await interaction.reply({
+      content: `Time (**${time}**) locked in! Now, select which day(s) this ping should run on:`,
+      components: [row],
+      ephemeral: true
     });
   }
 });
 
-// Optimized Scheduler: MySQL filters natively using ping_utc_day and ping_utc_time
 async function checkAndSendPings() {
     console.log("[Scheduler] Tick: Running checkAndSendPings...");
 
@@ -457,18 +490,13 @@ async function checkAndSendPings() {
             }
         }
     });
-  
+}
 
-
-  }
-
-// Run every 60 seconds
 setInterval(async () => {
     checkAndSendPings();
     console.log("minute check");
 }, 60 * 1000);
 
-// Log the bot in
 client.login(process.env.DISCORD_TOKEN);
 
 app.listen(3000, () => {
