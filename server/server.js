@@ -405,9 +405,13 @@ client.on('interactionCreate', async (interaction) => {
     });
     
     const sql = "INSERT INTO users (user_id, timezone) VALUES (?, ?) ON DUPLICATE KEY UPDATE timezone = VALUES(timezone)";
+    
+    
+    
     db.query(sql, [ownerId, chosenTimezone], (err, result) => {
       if (err) console.log(err);
     });
+    
   }
 
   if (interaction.commandName === 'add_ping_time') {
