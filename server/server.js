@@ -31,6 +31,10 @@ app.post("/post_test_msg", (req, res) => {
   console.log(req.body.test_msg);
 });
 
+app.get('/', (req, res) => {
+  res.send('Accountability Bot is running!');
+});
+
 // Initialize Discord Client
 const client = new Client({
   intents: [
@@ -504,6 +508,6 @@ setInterval(async () => {
 client.login(process.env.DISCORD_TOKEN);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(3000, () => {
     console.log(`Server running on port ${PORT}`);
 });

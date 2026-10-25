@@ -25,3 +25,4 @@ dist-ssr
 Plaintext
 .env
 server/.env
+dump.sql
