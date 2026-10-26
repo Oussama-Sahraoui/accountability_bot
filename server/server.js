@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const mysql = require('mysql2');
+const mysql = require('mysql2/promise');
 const cors = require('cors');
 const { Client, EmbedBuilder, GatewayIntentBits, REST, Routes, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const app = express();
@@ -19,8 +19,8 @@ if (process.env.BOT_ENABLED !== 'true') {
     
     return; // Skip the rest of the bot startup logic
 }
-// MySQL connection placeholder
-const db = mysql.createConnection({
+// MySQL connection pool
+const db = mysql.createPool({
     host: process.env.DB_HOST,
     port: process.env.DB_PORT, 
     user: process.env.DB_USER,
@@ -133,7 +133,44 @@ const commands = [
         description: 'Optional partner override',
         required: false,
       }
+     
     ]
+  },
+  {
+    name:'update_ping',
+    description:"Allows you to update/modify information about a given ping",
+    options:[{
+      name:"ping_id",
+      description:"ping_id of the ping you seek to modify",
+      type: 3,
+      required:true
+    },
+    {
+        name: 'target_channel',
+        type: 7, // CHANNEL
+        description: 'The channel where pings will be sent',
+        required: false,
+      },
+      {
+        name: 'msg',
+        type: 3,
+        description: 'Message the bot should send',
+        required: false,
+      },
+      {
+        name: 'partner',
+        type: 6, // USER
+        description: 'Your accountability partner to be pinged in case of failure',
+        required: false,
+      },
+      {
+        name: 'name',
+        type: 3, // STRING
+        description: 'Name of the habit',
+        required: false,
+      },
+      
+   ]
   },
   {
     name: "view_pings",
@@ -154,6 +191,18 @@ const commands = [
   {
     name: "help",
     description: "gives a list of commands a usage guide"
+  },
+  {
+    name:"delete_ping",
+    description:'deletes ping',
+    options:[
+      {
+        name:'ping_id',
+        description:'id of ping to be deleted',
+        type:3,
+        required:true
+      }
+    ]
   }
 ];
 
@@ -223,65 +272,108 @@ client.on('interactionCreate', async (interaction) => {
     }
     return;
   }
+  if (interaction.commandName==='update_ping'){
+        const ownerId = interaction.user.id;
+        const ping_name = interaction.options.getString('name');
+        const channel = interaction.options.getChannel('target_channel');
+        const msg = interaction.options.getString('msg');
+        const partner = interaction.options.getUser('partner');
+        const ping_id = interaction.options.getString('ping_id');
 
+        
+        const sql=`
+        UPDATE pings
+        SET
+        ping_name = COALESCE(?, ping_name  ),
+        target_channel = COALESCE(?, target_channel ) ,
+        pinged_partner_id = COALESCE(?,  pinged_partner_id),
+        message = COALESCE(?, message )
+        
+        WHERE ping_id= ? AND user_id= ?
+        
+        `
+      try{
+        const [result]= await db.query(sql,[ping_name ? ping_name: null,channel? channel.id : null,partner ? partner.id : null,msg? msg : null,ping_id,ownerId])
+          await interaction.reply(`Ping updated for <@${ownerId}> ID is <#${ping_id}>!`)
+          console.log("success")
+      }
+      catch(err){
+console.log(err)
+      }
+          
+
+  }
   // Handle Select Menu submission for multi-day ping times
-  if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_days') {
+// Handle Select Menu submission for multi-day ping times
+if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_days') {
     const ownerId = interaction.user.id;
     const pendingData = pendingPingTimes.get(ownerId);
 
     if (!pendingData) {
-      return interaction.update({ content: '❌ Session expired. Please run `/add_ping_time` again.', components: [] });
+        return interaction.update({ content: '❌ Session expired. Please run `/add_ping_time` again.', components: [] });
     }
 
     let selectedDays = interaction.values;
     if (selectedDays.includes('everyday')) {
-      selectedDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        selectedDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     }
 
-    const timezoneQuery = `SELECT timezone FROM users WHERE user_id = ?`;
-    db.query(timezoneQuery, [ownerId], async (err, results) => {
-      if (err || results.length === 0 || !results[0].timezone) {
-        return await interaction.update({
-          content: `❌ You must set your timezone using \`/set_time_zone\` before adding ping times!`,
-          components: [],
-        });
-      }
+    try {
+        // 1. Fetch user timezone using promise destructuring
+        const timezoneQuery = 'SELECT timezone FROM users WHERE user_id = ?';
+        const [timezoneResults] = await db.query(timezoneQuery, [ownerId]);
 
-      const userTimezone = results[0].timezone;
+        if (!timezoneResults || timezoneResults.length === 0 || !timezoneResults[0].timezone) {
+            return await interaction.update({
+                content: '❌ You must set your timezone using `/set_timezone` before adding ping times!',
+                components: [],
+            });
+        }
 
-      for (const day of selectedDays) {
-        const utcDate = convertLocalToUtc(day, pendingData.time, userTimezone);
-        const utcDay = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(utcDate);
-        const utcTime = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(utcDate);
+        const userTimezone = timezoneResults[0].timezone;
 
+        // 2. Loop through days and insert sequentially with `await`
         const insertSql = `
-          INSERT INTO ping_times 
+            INSERT INTO ping_times 
             (parent_ping_id, pinged_partner_id, message, day, time, ping_utc_day, ping_utc_time)
-          VALUES 
-            (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
-        db.query(insertSql, [
-          pendingData.ping_id, 
-          pendingData.partner ? pendingData.partner.id : null, 
-          pendingData.msg, 
-          day, 
-          pendingData.time, 
-          utcDay, 
-          utcTime
-        ], (err, result) => {
-          if (err) { console.log(err); } else { console.log(`Ping time added for ${day}!`); }
+
+        for (const day of selectedDays) {
+            const utcDate = convertLocalToUtc(day, pendingData.time, userTimezone);
+            const utcDay = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(utcDate);
+            const utcTime = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(utcDate);
+
+            await db.query(insertSql, [
+                pendingData.ping_id,
+                pendingData.partner ? pendingData.partner.id : null,
+                pendingData.msg,
+                day,
+                pendingData.time,
+                utcDay,
+                utcTime
+            ]);
+            
+            console.log(`Ping time added for ${day}`);
+        }
+
+        // 3. Clean up and send success message after everything finishes
+        pendingPingTimes.delete(ownerId);
+
+        await interaction.update({
+            content: `✅ Successfully created ping times for **${selectedDays.join(', ')}** at **${pendingData.time}** (${userTimezone})!`,
+            components: [],
         });
-      }
 
-      pendingPingTimes.delete(ownerId);
-
-      await interaction.update({
-        content: `🎉 Successfully created ping times for **${selectedDays.join(', ')}** at **${pendingData.time}** (${userTimezone})!`,
-        components: [],
-      });
-    });
+    } catch (err) {
+        console.log(err);
+        await interaction.update({
+            content: '❌ Failed to create ping times in the database.',
+            components: [],
+        });
+    }
     return;
-  }
+}
 
   if (!interaction.isChatInputCommand()) return;
 
@@ -298,34 +390,39 @@ client.on('interactionCreate', async (interaction) => {
       JOIN pings p ON pt.parent_ping_id = p.ping_id
       WHERE pt.parent_ping_id = ?
     `;
-    db.query(sql, [ping_Id], async (err, res) => {
-      if (err) {
-        console.log(err);
-        return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
-      }
+   try {
+    // 1. Destructure the returned rows array from the query promise
+    const [result] = await db.query(sql, [ping_Id]);
 
-      if (!res || res.length === 0) {
+    // 2. Check if no rows were returned
+    if (!result || result.length === 0) {
         return interaction.reply({ content: 'You have no active ping times.', ephemeral: true });
-      }
+    }
 
-      const timeEmbed = new EmbedBuilder()
+    // 3. Build the embed, mapping over `result` instead of `res`
+    const timeEmbed = new EmbedBuilder()
         .setColor(0x0099FF)
         .setTitle('Your Active Pings')
         .setDescription('Here are all your scheduled pings:')
         .addFields(
-          res.map(row => ({
-            name: 'ping time',
-            value: `**ID:** \`${row.ping_time_id}\`\n` +
-                   `**Time:** ${row.time}\n` +
-                   `**Day:** ${row.day}\n` +
-                   `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
-                   `**Message:** ${row.message || 'None'}`
-          }))
+            result.map(row => ({
+                name: 'ping time',
+                value: `**ID:** \`${row.ping_time_id}\`\n` +
+                       `**Time:** ${row.time}\n` +
+                       `**Day:** ${row.day}\n` +
+                       `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
+                       `**Message:** ${row.message || 'None'}`
+            }))
         )
         .setFooter({ text: 'View time overview' });
 
-      await interaction.reply({ embeds: [timeEmbed] });
-    });
+    // 4. Send the response back to Discord
+    await interaction.reply({ embeds: [timeEmbed] });
+
+} catch (err) {
+    console.log(err);
+    return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+}
   }
 
   if (interaction.commandName === 'view_pings') {
@@ -335,13 +432,11 @@ client.on('interactionCreate', async (interaction) => {
       FROM pings 
       WHERE user_id = ?
     `;
-    db.query(sql, [ownerId], async (err, res) => {
-      if (err) {
-        console.log(err);
-        return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
-      }
+  try {
+   const [result] = await db.query(sql, [ownerId])
+     
 
-      if (!res || res.length === 0) {
+      if (!result || result.length === 0) {
         return interaction.reply({ content: 'You have no active pings.', ephemeral: true });
       }
 
@@ -350,7 +445,7 @@ client.on('interactionCreate', async (interaction) => {
         .setTitle('Your Active Pings')
         .setDescription('Here are all your scheduled pings:')
         .addFields(
-          res.map(row => ({
+          result.map(row => ({
             name: "name: " + row.ping_name || 'Ping',
             value: `**ID:** \`${row.ping_id}\`\n` +
                    `**Channel:** <#${row.target_channel}>\n` +
@@ -361,7 +456,26 @@ client.on('interactionCreate', async (interaction) => {
         .setFooter({ text: 'Ping Overview' });
 
       await interaction.reply({ embeds: [viewEmbed] });
-    });
+      }
+     catch (err) {
+        console.log(err);
+        return interaction.reply({ content: 'Error fetching pings.', ephemeral: true });
+      }
+  }
+
+  if (interaction.commandName === 'delete_ping') {
+    const ownerId= interaction.user.id;
+    const ping_id = interaction.options.getString('ping_id');
+    const sql=`
+    DELETE FROM pings
+    where ping_id= ? AND user_id= ? 
+    `
+    try {
+      const [result] = await db.query(sql,[ping_id,ownerId])
+      await interaction.reply(`Ping deleted for <@${ownerId}> ID <${ping_id}>!`)
+    } catch(err){
+      console.log(err)
+    }
   }
 
   if (interaction.commandName === 'help') {
@@ -387,16 +501,24 @@ client.on('interactionCreate', async (interaction) => {
     const partner = interaction.options.getUser('partner');
     const score = 0;
     
-    await interaction.reply(`Ping created for <@${ownerId}> in <#${channel.id}>!`);
     const sql = `
       INSERT INTO pings 
         (user_id, ping_name, target_channel, pinged_partner_id, message, score) 
       VALUES 
         (?, ?, ?, ?, ?, ?)
     `;
-    db.query(sql, [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score], (err, result) => {
-      if (err) { console.log(err); } else { console.log("Ping created successfully!"); }
-    });
+    try {
+     const [result] = await db.query(sql, [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score])
+    console.log("Ping created successfully!"); 
+            await interaction.reply(`Ping created for <@${ownerId}> in <#${channel.id}>!`)
+    }
+    catch (err){
+
+        await interaction.reply({ content: "❌ Failed to create ping in database.", ephemeral: true });
+        console.log(err)
+      }
+ 
+  
   }
 
   if (interaction.commandName === 'set_time_zone') {
@@ -418,10 +540,11 @@ client.on('interactionCreate', async (interaction) => {
     const sql = "INSERT INTO users (user_id, timezone) VALUES (?, ?) ON DUPLICATE KEY UPDATE timezone = VALUES(timezone)";
     
     
+    try {
+   const [result]= await db.query(sql, [ownerId, chosenTimezone]) }
+      
+      catch(err){  console.log(err);}
     
-    db.query(sql, [ownerId, chosenTimezone], (err, result) => {
-      if (err) console.log(err);
-    });
     
   }
 
@@ -477,16 +600,13 @@ async function checkAndSendPings() {
         WHERE pt.ping_utc_day = DAYNAME(UTC_TIMESTAMP())
           AND pt.ping_utc_time = TIME_FORMAT(UTC_TIMESTAMP(), '%H:%i:00')
     `;
+try{
+  const [result] =await db.query(sql) 
+       
 
-    db.query(sql, async (err, results) => {
-        if (err) {
-            console.error("[Scheduler] ❌ SQL Error fetching pings:", err);
-            return;
-        }
+        console.log(`[Scheduler] 📊 Query matched ${result.length} ping(s) for the current UTC minute.`);
 
-        console.log(`[Scheduler] 📊 Query matched ${results.length} ping(s) for the current UTC minute.`);
-
-        for (const row of results) {
+        for (const row of result) {
             try {
                 console.log(`[Scheduler] ✅ MATCH FOUND! Attempting to send ping for user ${row.user_id}...`);
                 
@@ -512,7 +632,11 @@ async function checkAndSendPings() {
                 console.error(`[Scheduler] ❌ Failed to process row ${row.ping_time_id}:`, innerErr);
             }
         }
-    });
+      }
+    catch (err) {
+            console.error("[Scheduler] ❌ SQL Error fetching pings:", err);
+            return;
+        }
 }
 
 setInterval(async () => {
