@@ -11,7 +11,13 @@ app.use(cors());
 
 if (process.env.BOT_ENABLED !== 'true') {
     console.log('🛑 Bot is disabled via environment flag. Standing by...');
-    return; // Exit or do nothing!
+    
+    // Keeps Render's web service wrapper happy and alive
+    setInterval(() => {
+        // Idling...
+    }, 60 * 60 * 1000);
+    
+    return; // Skip the rest of the bot startup logic
 }
 // MySQL connection placeholder
 const db = mysql.createConnection({
