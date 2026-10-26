@@ -8,6 +8,11 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+
+if (process.env.BOT_ENABLED !== 'true') {
+    console.log('🛑 Bot is disabled via environment flag. Standing by...');
+    return; // Exit or do nothing!
+}
 // MySQL connection placeholder
 const db = mysql.createConnection({
     host: process.env.DB_HOST,
