@@ -509,11 +509,25 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_da
     `;
     try {
      const [result] = await db.query(sql, [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score])
-    console.log("Ping created successfully!"); 
-            await interaction.reply(`Ping created for <@${ownerId}> in <#${channel.id}>!`)
-    }
-    catch (err){
+    const  sql2 = `
+      SELECT ping_id FROM pings 
+       WHERE user_id = ? AND
+       ping_name <=>   ? AND
+       target_channel = ? AND
+       pinged_partner_id <=> ? AND 
+       message <=> ? AND
+       score <=> ? 
+    `;
+     const  [result2] = await db.query(sql2 , [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score])
 
+     
+    console.log("Ping created successfully!"); 
+await interaction.reply({ 
+    content: `Ping created for <@${ownerId}> in <#${channel.id}>! with ID <${result2[0].ping_id}>`, 
+    ephemeral: true 
+});    }
+    catch (err){
+        
         await interaction.reply({ content: "❌ Failed to create ping in database.", ephemeral: true });
         console.log(err)
       }
@@ -555,6 +569,49 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_da
     const partner = interaction.options.getUser('partner');
     const time = interaction.options.getString('time');
 
+
+    const sql=`
+    SELECT * FROM pings
+    WHERE ping_id= ?
+    AND user_id= ?
+    `
+    try{
+    
+      const [result] = await db.query(sql,[ping_id,ownerId])
+      console.log(result)
+      if (result.length === 0){
+       
+       try {
+    const sql=`
+    SELECT * FROM pings
+    WHERE ping_id= ?
+    `
+       
+        const [result] = await db.query(sql,[ping_id])
+        if (result.length === 0){ 
+        await interaction.reply({ content: "ping doesn't exist", ephemeral: true }); 
+          return 
+        } else {
+        await interaction.reply({ content: "you do not own this ping", ephemeral: true }); 
+          return
+        }
+       
+      
+      }
+       catch (err){
+        console.log(err)
+        return
+       }
+      }
+    }
+    catch (err) {
+        console.log(err)
+      return
+    }
+    
+    
+    
+    
     pendingPingTimes.set(ownerId, { ping_id, time, msg, partner });
 
     const selectMenu = new StringSelectMenuBuilder()
