@@ -77,6 +77,7 @@ const commands = [
         type: 7, // CHANNEL
         description: 'The channel where pings will be sent',
         required: true,
+        channel_types: [0]
       },
       {
         name: 'msg',
@@ -203,6 +204,19 @@ const commands = [
         required:true
       }
     ]
+  },
+  {
+    name:"delete_ping_time",
+    description:'deletes ping_time',
+    options:[
+      {
+
+        name:'ping_time_id',
+        description:'id of ping_time to be deleted',
+        type:3,
+        required:true
+      }
+    ]
   }
 ];
 
@@ -259,6 +273,8 @@ client.once('ready', async () => {
 
 // Listen for interactions (Autocomplete, Slash Commands, and Select Menus)
 client.on('interactionCreate', async (interaction) => {
+ 
+ 
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'set_time_zone') {
       const focusedValue = interaction.options.getFocused().toLowerCase();
@@ -272,6 +288,35 @@ client.on('interactionCreate', async (interaction) => {
     }
     return;
   }
+
+if (!interaction.isChatInputCommand()) return;
+
+  // 🛡️ Global Timezone Middleware Guard
+  const EXEMPT_COMMANDS = ['set_time_zone', 'help'];
+  if (!EXEMPT_COMMANDS.includes(interaction.commandName)) {
+    const ownerId = interaction.user.id;
+    try {
+      const [userRows] = await db.query('SELECT timezone FROM users WHERE user_id = ?', [ownerId]);
+      
+      if (!userRows || userRows.length === 0 || !userRows[0].timezone) {
+        return await interaction.reply({
+          content: "⚠️ **Setup Required:** You must configure your timezone using `/set_time_zone` at least once before using this bot!",
+          ephemeral: true
+        });
+      }
+    } catch (err) {
+      console.error("[Middleware] Error checking timezone:", err);
+      return await interaction.reply({
+        content: "❌ An error occurred while verifying your account setup.",
+        ephemeral: true
+      });
+    }
+  }
+
+  // --- Your regular command handlers continue below ---
+
+
+
   if (interaction.commandName==='update_ping'){
         const ownerId = interaction.user.id;
         const ping_name = interaction.options.getString('name');
@@ -280,7 +325,6 @@ client.on('interactionCreate', async (interaction) => {
         const partner = interaction.options.getUser('partner');
         const ping_id = interaction.options.getString('ping_id');
 
-        
         const sql=`
         UPDATE pings
         SET
@@ -288,21 +332,21 @@ client.on('interactionCreate', async (interaction) => {
         target_channel = COALESCE(?, target_channel ) ,
         pinged_partner_id = COALESCE(?,  pinged_partner_id),
         message = COALESCE(?, message )
-        
         WHERE ping_id= ? AND user_id= ?
-        
         `
+
       try{
         const [result]= await db.query(sql,[ping_name ? ping_name: null,channel? channel.id : null,partner ? partner.id : null,msg? msg : null,ping_id,ownerId])
-          await interaction.reply(`Ping updated for <@${ownerId}> ID is <#${ping_id}>!`)
+          await interaction.reply(`Ping updated for <@${ownerId}> ID is \`${ping_id}\`!`)
           console.log("success")
       }
       catch(err){
 console.log(err)
       }
-          
-
   }
+
+
+
   // Handle Select Menu submission for multi-day ping times
 // Handle Select Menu submission for multi-day ping times
 if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_days') {
@@ -405,6 +449,11 @@ await interaction.update({
 
   if (interaction.commandName === 'view_ping_times') {
     const ping_Id = interaction.options.getString('ping_id');
+    const ownerId = interaction.user.id;
+    
+
+
+
     const sql = `
       SELECT 
         pt.ping_time_id,
@@ -415,10 +464,11 @@ await interaction.update({
       FROM ping_times pt
       JOIN pings p ON pt.parent_ping_id = p.ping_id
       WHERE pt.parent_ping_id = ?
+      AND p.user_id = ? 
     `;
    try {
     // 1. Destructure the returned rows array from the query promise
-    const [result] = await db.query(sql, [ping_Id]);
+    const [result] = await db.query(sql, [ping_Id,ownerId]);
 
     // 2. Check if no rows were returned
     if (!result || result.length === 0) {
@@ -502,6 +552,35 @@ await interaction.update({
     } catch(err){
       console.log(err)
     }
+  }
+  
+  if (interaction.commandName === 'delete_ping_time'){
+    const ownerId= interaction.user.id;
+   
+    const ping_time_id = interaction.options.getString('ping_time_id');
+    const sql = `
+    DELETE pt 
+    FROM ping_times pt
+    JOIN pings p ON pt.parent_ping_id = p.ping_id
+    WHERE pt.ping_time_id = ? 
+ 
+      AND p.user_id = ?
+`;
+    try {
+    const [result] = await db.query(sql, [ping_time_id, ownerId]);
+
+    if (result.affectedRows === 0) {
+        return await interaction.reply({ 
+            content: " Could not delete ping time. Check if the IDs are correct and you own this ping.", 
+            ephemeral: true 
+        });
+    }
+
+    await interaction.reply(`Ping time deleted for <@${ownerId}> ID <${ping_time_id}>!`);
+} catch (err) {
+    console.log(err);
+    await interaction.reply({ content: "❌ Error deleting ping time.", ephemeral: true });
+}
   }
 
   if (interaction.commandName === 'help') {
