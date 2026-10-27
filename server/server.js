@@ -308,6 +308,8 @@ console.log(err)
 if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_days') {
     const ownerId = interaction.user.id;
     const pendingData = pendingPingTimes.get(ownerId);
+    const successes = [];
+const duplicates = [];
 
     if (!pendingData) {
         return interaction.update({ content: '❌ Session expired. Please run `/add_ping_time` again.', components: [] });
@@ -343,7 +345,7 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_da
             const utcDate = convertLocalToUtc(day, pendingData.time, userTimezone);
             const utcDay = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(utcDate);
             const utcTime = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(utcDate);
-
+ try {
             await db.query(insertSql, [
                 pendingData.ping_id,
                 pendingData.partner ? pendingData.partner.id : null,
@@ -353,25 +355,49 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_da
                 utcDay,
                 utcTime
             ]);
-            
-            console.log(`Ping time added for ${day}`);
+            successes.push(day);
+            console.log(`Ping time added for ${day}`); }
+            catch(err){
+              if (err.errno === 1062 || err.code === 'ER_DUP_ENTRY') {
+            duplicates.push(day);
+        } else {
+            console.log(err); 
+        }
+            }
         }
 
         // 3. Clean up and send success message after everything finishes
         pendingPingTimes.delete(ownerId);
 
-        await interaction.update({
-            content: `✅ Successfully created ping times for **${selectedDays.join(', ')}** at **${pendingData.time}** (${userTimezone})!`,
-            components: [],
-        });
+// Build a granular response message
+let replyContent = '';
+if (successes.length > 0) {
+    replyContent += `✅ Successfully created ping times for **${successes.join(', ')}** at **${pendingData.time}** (${userTimezone})!\n`;
+}
+if (duplicates.length > 0) {
+    replyContent += `⚠️ Skipped the following days (already booked): **${duplicates.join(', ')}**`;
+}
+
+await interaction.update({
+    content: replyContent,
+    components: [],
+});
 
     } catch (err) {
-        console.log(err);
+    console.log(err);
+    
+    if (err.errno === 1062 || err.code === 'ER_DUP_ENTRY') {
         await interaction.update({
-            content: '❌ Failed to create ping times in the database.',
+            content: ' You already have a ping scheduled for this exact time slot!',
+            components: [],
+        });
+    } else {
+        await interaction.update({
+            content: ' Failed to create ping times in the database.',
             components: [],
         });
     }
+}
     return;
 }
 
