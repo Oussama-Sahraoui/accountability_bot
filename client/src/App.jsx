@@ -32,17 +32,63 @@ console.log("ran the fetch!")
   
   }
 }
+const list = [{
+    ping_id: "testid",
+    ping_name: "testname",
+    target_channel: "testchannel",
+    ping_partner_id: "testid2",
+    message: "we be testng",
+    score: 12
+  }]
+
+  // Destructure props correctly using curly braces { }
+  function Ping({ ping_id, ping_name, target_channel, ping_partner_id, message, score }) {
+    return (
+      <div>
+        <p>test</p>
+        <p>Ping id: {ping_id}</p>
+        <p>ping name: {ping_name}</p>
+        <p>target_channel: {target_channel}</p>
+        <p>ping_partner_id: {ping_partner_id}</p>
+        <p>message: {message}</p>
+        <p>score: {score}</p>
+      </div>
+    )
+  }
+
+const pings= list.map(item => (
+            <Ping 
+              key={item.ping_id} 
+              ping_id={item.ping_id} 
+              ping_name={item.ping_name}
+              target_channel={item.target_channel}
+              ping_partner_id={item.ping_partner_id}
+              message={item.message}
+              score={item.score}
+            />
+          ))
+
 
 
   return (
-    <div>
-    
-    {msg}
-<input onChange={(e) => setMsgToBackend(e.target.value)} />   
- <button  onClick={()=>{fetch_test_msg()}   }>Click to get message from backend</button>
-   <button  onClick={()=>{post_test_msg()}   }>Click to send message to backend </button>
-    </div>
+    <main>
+      <header>
+        Management framework  
+        <div>
+          <button>Guide</button>  
+          <button>Sign in</button>
+        </div>
+      </header>
+      <div>
+        <p> Your pings </p>
+        <div>  
+          {pings}
+        </div>
+      </div>
+      <footer></footer>
+    </main>
   )
 }
+
 
 export default App
