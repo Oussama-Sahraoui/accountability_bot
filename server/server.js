@@ -9,15 +9,18 @@ app.use(express.json());
 app.use(cors());
 
 
+
+// this is code is not integral to the bot/service, it's so I can turn off the online hosted server via enviromental variables
+// so that I don't have to figure out or deal with any problems relating to different hosting platforms, or changes in UI, commands, etc.
+//
 if (process.env.BOT_ENABLED !== 'true') {
     console.log('🛑 Bot is disabled via environment flag. Standing by...');
     
-    // Keeps Render's web service wrapper happy and alive
     setInterval(() => {
         // Idling...
     }, 60 * 60 * 1000);
     
-    return; // Skip the rest of the bot startup logic
+    return; 
 }
 // MySQL connection pool
 const db = mysql.createPool({
@@ -633,7 +636,7 @@ await interaction.reply({
 });    }
     catch (err){
         
-        await interaction.reply({ content: "❌ Failed to create ping in database.", ephemeral: true });
+        await interaction.reply({ content: " Failed to create ping in database.", ephemeral: true });
         console.log(err)
       }
  
