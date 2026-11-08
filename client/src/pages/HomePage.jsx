@@ -14,22 +14,33 @@ const data=[
 
 {
 ping_name:"teeth",
-target_channe:"",
+target_channel:"",
+pinged_partner_id:"",
+message:"this is a relatively normal length message, let's see if it creates issues. It seems like it's not, but let's keep going. Maybe I'll have it so if a message overflows then it just scrolls within it. Which is very unlikely to happen anyways",
+score:''
+},
+{
+ping_name:"very long title for testing",
+target_channel:"",
 pinged_partner_id:"",
 message:"",
 score:''
 },
 {
-"":""
-
-},
-{
-"":""
-
+ping_name:"teeth",
+target_channel:"",
+pinged_partner_id:"",
+message:"",
+score:''
 }
 ]
-  return <div className='   py-2 px-10 '>
-        <div className=' border border-black py-2 px-4  flex flex-col  justify-evenly gap-2'>
+
+const pings = data.map((ping)=>(
+<PingCard ping_name={ping.ping_name} target_channel={ping.target_channel} 
+pinged_partner_id={ping.pinged_partner_id} message={ping.message} score={ping.score}/>
+))
+  return <div className='   py-2 px-3 lg:px-10 '>
+        <div className=' border border-black  py-2 px-2 lg:px-4  flex flex-col  justify-evenly gap-2'>
             <div className='  flex justify-between *:border *:border-black *:rounded *:px-2 *:py-1'>   
                 <button>
                     add ping
@@ -39,11 +50,10 @@ score:''
                 </button>
             </div>
             <input placeholder="  search for ping by name or ID" className="p-1 border border-black"/>
-            <div className="   border border-black p-2">
-                <div className='    max-w-5xl mx-auto  grid grid-cols-1 md:grid-cols-2 gap-8 items-center justify-items-center'>               
-                    <PingCard/>
-                    <PingCard/>
-                    <PingCard/>
+            <div className="   p-2">
+<div className='max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-8 w-full'>                   
+     {pings}
+                    
                     
                 </div>
             </div>
