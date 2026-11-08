@@ -30,3 +30,12 @@
     font-size: 16px;
   }
 }
+/* Globally hide scrollbars for every element in the app */
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+*::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
