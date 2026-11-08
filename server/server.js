@@ -4,9 +4,21 @@ const mysql = require('mysql2/promise');
 const cors = require('cors');
 const { Client, EmbedBuilder, GatewayIntentBits, REST, Routes, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const app = express();
+const session = require('express-session');
+
+app.use(session({
+    secret: 'some_random_secret_key_here',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 1 day
+}));
+
 
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:5173', // Match your frontend URL exactly
+  credentials: true                // Allow cookies to be sent/saved
+}));
 
 
 
@@ -37,13 +49,44 @@ const db = mysql.createPool({
 // Temporary storage for multi-step ping time selection
 const pendingPingTimes = new Map();
 
-app.get("/fetch_test_msg", (req, res) => {
-  res.send("hi");
+
+//react front end section
+
+
+
+
+
+
+ app.post("/sign_in", async (req, res) => {
+
+  const sql=`
+  SELECT * FROM users
+  WHERE user_id = ? AND password = ?
+  `
+  try{
+  const [result]= await db.query(sql,[req.body.user_id,req.body.password])
+  if (result.length > 0) {
+    req.session.userId = result[0].user_id;
+    res.json({ success: true, user: result[0] });
+  } else {
+    res.status(401).json({ success: false });
+  }
+}
+catch(err){
+  console.log(err)
+}
+
+
+
 });
 
 app.post("/post_test_msg", (req, res) => {
   console.log(req.body.test_msg);
 });
+
+
+//react front end section
+
 
 app.get('/', (req, res) => {
   res.send('Accountability Bot is running!');
@@ -220,6 +263,18 @@ const commands = [
         required:true
       }
     ]
+  },
+  {
+    name:"set_password",
+    description:'set the password that allows you to use the web interface',
+    options:[
+      {
+        name:"password",
+        description:"the password",
+        type:3,
+        required:true
+      }
+    ]
   }
 ];
 
@@ -317,8 +372,22 @@ if (!interaction.isChatInputCommand()) return;
   }
 
   // --- Your regular command handlers continue below ---
+  if (interaction.commandName==='set_password'){
+    const ownerId=interaction.user.id;
+    const password=interaction.options.getString("password")
 
+  const sql=`
+  UPDATE users SET password = ? WHERE user_id = ?
+  `
 
+  try {
+  const [result]= await db.query (sql,[password,ownerId])
+    return interaction.reply({ content: 'You successfully set/updated your password', ephemeral: true });
+  }
+  catch (err){
+    console.log(err)
+  }
+  }
 
   if (interaction.commandName==='update_ping'){
         const ownerId = interaction.user.id;

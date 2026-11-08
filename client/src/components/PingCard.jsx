@@ -8,7 +8,7 @@ return(
             <p>Ping name: {ping_name}</p>
              <p>Target channel: {target_channel}</p>
              <p>Pinged parnter: {pinged_partner_id}</p>
-      <div className='overflow-y-scroll h-32 p-1 border border-black'>        <p>Message: {message}</p>  </div>
+      <div className='overflow-y-scroll h-32 p-1 border border-black'>        <p>Message:{message}</p>  </div>
              <p>Score: {score}</p>
         </div>
         <div className='border border-black  h-full p-2 flex flex-col justify-between gap-2 lg:gap-6'>
@@ -16,7 +16,7 @@ return(
                 <button>View ping times</button>
                 <button>view more</button>
             </div>
-            <button className='border border-black '>add or modify ping times</button>
+            <button className='border border-black px-1 py-1 '>add/modify ping times</button>
             <div className='*:px-1 *:py-1  *:border *:border-black flex flex-col justify-evenly  gap-2 '>
                 <button>delete</button>
                 <button>edit</button>

@@ -1,10 +1,24 @@
 import {React,useState} from 'react';
 import { Link} from 'react-router-dom';
 import PingCard from '../components/PingCard';
+import Axios from 'axios'
 
 export default function HomePage() {
 
+    const [selectedServer,setSelectedServer]=useState("")
 
+const fetchServers = async ()=>{
+try{
+    const  response =  await axios.post("http://localhost:3000/fetch_servers",{
+   },{ 
+    withCredentials: true 
+})
+  console.log(response)
+}
+catch(err){
+    console.log(err)
+}
+}
 //this is place holder dummy data to see how the UI looks before I carry on with further coding
 //keep in mind not all the fetched data is display right away, some additional data like specific ips
 //are hidden behind the view more button. In addition to that for user convinence we try to display the
@@ -45,7 +59,7 @@ pinged_partner_id={ping.pinged_partner_id} message={ping.message} score={ping.sc
                 <button>
                     add ping
                 </button>
-                <button>
+                <button onClick={()=>{fetchServers()}}>
                     select server 
                 </button>
             </div>
