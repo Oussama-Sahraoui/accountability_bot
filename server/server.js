@@ -1,3 +1,5 @@
+Error.stackTraceLimit = 2;
+
 require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
@@ -136,6 +138,12 @@ const commands = [
         type: 6, // USER
         description: 'Your accountability partner to be pinged in case of failure',
         required: false,
+      },
+      {
+        name: 'window_duration',
+        type: 4,
+        description: 'the duration of the window where you can do /check, if this window elapses you auto fail',
+        required: false,
       }
     ]
   },
@@ -179,6 +187,12 @@ const commands = [
         type: 6, // USER
         description: 'Optional partner override',
         required: false,
+      },
+      {
+        name: 'window_duration',
+        type: 4,
+        description: 'The duration of the window during which you can /check success (default none)',
+        required: false,
       }
      
     ]
@@ -216,6 +230,12 @@ const commands = [
         description: 'Name of the habit',
         required: false,
       },
+      {
+        name: 'window_duration',
+        type: 4,
+        description: 'duration of window failure',
+        required: false,
+      }
       
    ]
   },
@@ -347,7 +367,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-if (!interaction.isChatInputCommand()) return;
+
 
   // 🛡️ Global Timezone Middleware Guard
   const EXEMPT_COMMANDS = ['set_time_zone', 'help'];
@@ -396,6 +416,7 @@ if (!interaction.isChatInputCommand()) return;
         const msg = interaction.options.getString('msg');
         const partner = interaction.options.getUser('partner');
         const ping_id = interaction.options.getString('ping_id');
+        const window_duration =interaction.options.getInteger("window_duration")
 
         const sql=`
         UPDATE pings
@@ -403,12 +424,19 @@ if (!interaction.isChatInputCommand()) return;
         ping_name = COALESCE(?, ping_name  ),
         target_channel = COALESCE(?, target_channel ) ,
         pinged_partner_id = COALESCE(?,  pinged_partner_id),
-        message = COALESCE(?, message )
+        message = COALESCE(?, message ),
+        window_duration = COALESCE (?,window_duration)
         WHERE ping_id= ? AND user_id= ?
         `
 
       try{
-        const [result]= await db.query(sql,[ping_name ? ping_name: null,channel? channel.id : null,partner ? partner.id : null,msg? msg : null,ping_id,ownerId])
+        const [result]= await db.query(sql,[ping_name ? ping_name: null,
+          channel? channel.id : null,
+          partner ? partner.id : null,
+          msg? msg : null,
+          window_duration? window_duration : null,
+          ping_id,
+          ownerId])
           await interaction.reply(`Ping updated for <@${ownerId}> ID is \`${ping_id}\`!`)
           console.log("success")
       }
@@ -422,6 +450,7 @@ console.log(err)
   // Handle Select Menu submission for multi-day ping times
 // Handle Select Menu submission for multi-day ping times
 if (interaction.isStringSelectMenu() && interaction.customId === 'select_ping_days') {
+    console.log('test')
     const ownerId = interaction.user.id;
     const pendingData = pendingPingTimes.get(ownerId);
     const successes = [];
@@ -435,7 +464,7 @@ const duplicates = [];
     if (selectedDays.includes('everyday')) {
         selectedDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     }
-
+    console.log("selected days are "+selectedDays)
     try {
         // 1. Fetch user timezone using promise destructuring
         const timezoneQuery = 'SELECT timezone FROM users WHERE user_id = ?';
@@ -453,8 +482,8 @@ const duplicates = [];
         // 2. Loop through days and insert sequentially with `await`
         const insertSql = `
             INSERT INTO ping_times 
-            (parent_ping_id, pinged_partner_id, message, day, time, ping_utc_day, ping_utc_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (parent_ping_id, pinged_partner_id, message, day, time, ping_utc_day, ping_utc_time, window_duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         for (const day of selectedDays) {
@@ -469,7 +498,8 @@ const duplicates = [];
                 day,
                 pendingData.time,
                 utcDay,
-                utcTime
+                utcTime,
+                0
             ]);
             successes.push(day);
             console.log(`Ping time added for ${day}`); }
@@ -517,15 +547,10 @@ await interaction.update({
     return;
 }
 
-  if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'view_ping_times') {
     const ping_Id = interaction.options.getString('ping_id');
     const ownerId = interaction.user.id;
-    
-
-
-
     const sql = `
       SELECT 
         pt.ping_time_id,
@@ -576,7 +601,7 @@ await interaction.update({
   if (interaction.commandName === 'view_pings') {
     const ownerId = interaction.user.id;
     const sql = `
-      SELECT ping_id, ping_name, target_channel, pinged_partner_id, message 
+      SELECT ping_id, ping_name, target_channel, pinged_partner_id, message, window_duration 
       FROM pings 
       WHERE user_id = ?
     `;
@@ -598,7 +623,8 @@ await interaction.update({
             value: `**ID:** \`${row.ping_id}\`\n` +
                    `**Channel:** <#${row.target_channel}>\n` +
                    `**Partner:** ${row.pinged_partner_id ? `<@${row.pinged_partner_id}>` : 'None'}\n` +
-                   `**Message:** ${row.message || 'None'}`
+                   `**Message:** ${row.message || 'None'}\n` +
+                   `**Window duration:** ${row.window_duration || 'None'} **Mins**`
           }))
         )
         .setFooter({ text: 'Ping Overview' });
@@ -676,16 +702,17 @@ await interaction.update({
     const channel = interaction.options.getChannel('target_channel');
     const msg = interaction.options.getString('msg');
     const partner = interaction.options.getUser('partner');
+    const window_duration= interaction.options.getInteger("window_duration");
     const score = 0;
     
     const sql = `
       INSERT INTO pings 
-        (user_id, ping_name, target_channel, pinged_partner_id, message, score) 
+        (user_id, ping_name, target_channel, pinged_partner_id, message, score, window_duration) 
       VALUES 
-        (?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?,?)
     `;
     try {
-     const [result] = await db.query(sql, [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score])
+     const [result] = await db.query(sql, [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score,window_duration])
     const  sql2 = `
       SELECT ping_id FROM pings 
        WHERE user_id = ? AND
@@ -693,9 +720,10 @@ await interaction.update({
        target_channel = ? AND
        pinged_partner_id <=> ? AND 
        message <=> ? AND
-       score <=> ? 
+       score <=> ? AND
+       window_duration <=> ?
     `;
-     const  [result2] = await db.query(sql2 , [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score])
+     const  [result2] = await db.query(sql2 , [ownerId, ping_name, channel.id, partner ? partner.id : null, msg, score,window_duration])
 
      
     console.log("Ping created successfully!"); 
@@ -745,7 +773,7 @@ await interaction.reply({
     const msg = interaction.options.getString('msg');
     const partner = interaction.options.getUser('partner');
     const time = interaction.options.getString('time');
-
+    const window_duration= interaction.options.getInteger('window_duration')
 
     const sql=`
     SELECT * FROM pings
@@ -755,7 +783,7 @@ await interaction.reply({
     try{
     
       const [result] = await db.query(sql,[ping_id,ownerId])
-      console.log(result)
+    
       if (result.length === 0){
        
        try {
@@ -788,7 +816,7 @@ await interaction.reply({
     
     
     
-    
+    console.log(ownerId, { ping_id, time, msg, partner, window_duration })
     pendingPingTimes.set(ownerId, { ping_id, time, msg, partner });
 
     const selectMenu = new StringSelectMenuBuilder()
